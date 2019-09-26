@@ -72,7 +72,7 @@ class SoftTripleLoss(nn.Module):
             subtraction_norm = 1.0 - torch.matmul(
                 weight_sub, weight_sub.transpose(1, 0)
             )
-            subtraction_norm[subtraction_norm < 0.0] = 0
+            subtraction_norm[subtraction_norm <= 0.0] = 1e-10
             loss += torch.sqrt(2 * subtraction_norm.triu(diagonal=1)).sum()
 
         loss /= (
