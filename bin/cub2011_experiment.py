@@ -6,6 +6,7 @@ import argparse
 import subprocess
 import shutil
 import os
+import tempfile
 
 import pandas as pd
 import mlflow
@@ -16,7 +17,6 @@ import torch.nn.functional as F
 
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
-from torchvision.models import inception_v3
 from torchvision.models import googlenet
 from tqdm import tqdm
 
@@ -170,7 +170,6 @@ class BackBoneEmbedding(nn.Module):
         x = torch.flatten(x, 1)
         # N x 1024
         x = self.fc(x)
-        x = self.relu(x)
         # x = self.bn_last(x)
         x = F.normalize(x)
         return x
@@ -190,6 +189,12 @@ transform_test = transforms.Compose(
 
 
 def _iterate_train(batch, backbone, center, optimizer1, optimzier2, device):
+    """iterate training
+
+    Returns:
+        - the count of correctly predicted samples
+        - loss item used in optimization
+    """
     optimizer1.zero_grad()
     optimizer2.zero_grad()
     backbone.train()
@@ -212,7 +217,13 @@ def _iterate_train(batch, backbone, center, optimizer1, optimzier2, device):
     return correct, loss.item()
 
 
-def _iterate_test(batch, backbone, center, device):
+def _iterate_val(batch, backbone, center, device):
+    """Evaluate models with the same metrics as is on training
+
+    Returns:
+        - the count of correctly predicted samples
+        - loss item used in optimization
+    """
     with torch.no_grad():
         backbone.eval()
         center.eval()
@@ -226,6 +237,36 @@ def _iterate_test(batch, backbone, center, device):
         loss = center(feat, labels)
 
         return correct, loss.item()
+
+
+def _iterate_test(batch, backbone, device):
+    """Calculate embedding features to evaluate models in test set
+
+    Returns:
+        - latent features
+        - labels
+    """
+    with torch.no_grad():
+        backbone.eval()
+        x, labels = batch
+        x = x.to(device)
+        labels = labels.to(device)
+        feat = backbone(x)
+        return feat, labels
+
+
+def recall(embeddings, labels, k=1):
+    """Calculate Recall@k score"""
+    similarities = torch.matmul(embeddings, embeddings.transpose(1, 0))
+    similar_items_index = torch.argsort(similarities, dim=1, descending=True)[:, 1:]
+    same_item_found = 0
+    total_item_count = similarities.size(0)
+    for i in range(total_item_count):
+        label_target = labels[i]
+        labels_similar = labels[similar_items_index[i, :k]]
+        if label_target in labels_similar:
+            same_item_found += 1
+    return same_item_found / total_item_count
 
 
 if __name__ == "__main__":
@@ -315,7 +356,7 @@ if __name__ == "__main__":
             correct = 0
             loss = 0
             for idx, batch in enumerate(val_dl):
-                correct_iter, loss_iter = _iterate_test(
+                correct_iter, loss_iter = _iterate_val(
                     batch, backbone, softtriple, device
                 )
                 correct += correct_iter.sum()
@@ -333,3 +374,35 @@ if __name__ == "__main__":
         # Log model
         mlflow.pytorch.log_model(backbone, "backbone")
         mlflow.pytorch.log_model(softtriple, "center")
+
+        # calculate features of test sets to evaluate the model later
+        test_dataset = CUB2011("test", transform=transform_test)
+        test_dl = torch.utils.data.DataLoader(
+            test_dataset, batch_size=args.batch_size, num_workers=4
+        )
+        test_feats = []
+        test_labels = []
+        for batch in tqdm(test_dl, desc="Computing embedding vectors for test set"):
+            feats, labels = _iterate_test(batch, backbone, device)
+            test_feats.append(feats)
+            test_labels.append(labels)
+
+        test_feats = torch.cat(test_feats)
+        test_labels = torch.cat(test_labels)
+        with tempfile.TemporaryDirectory() as dname:
+            path_test_feats = os.path.join(dname, "test_embeddings.pkl")
+            path_test_labels = os.path.join(dname, "test_labels.pkl")
+            with open(path_test_feats, "w+b") as f:
+                torch.save(test_feats, f)
+
+            mlflow.log_artifact(path_test_feats)
+            with open(path_test_labels, "w+b") as f:
+                torch.save(test_labels, f)
+
+            mlflow.log_artifact(path_test_labels)
+
+        for k in range(1, 10):
+            recall_value = recall(test_feats, test_labels, k)
+            print(f"Recall@{k}: {recall_value:.4f}")
+            mlflow.log_metric(f"recall_{k}", recall_value)
+
