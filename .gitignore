@@ -105,3 +105,6 @@ venv.bak/
 
 # dataset
 CUB_200_2011*
+
+# log directory
+mlruns/

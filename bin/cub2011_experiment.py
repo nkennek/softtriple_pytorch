@@ -62,7 +62,9 @@ class CUB2011(ImageFolder):
             raise ValueError("Unknown subset. It should be either train or test")
 
         # create directory for dataset by symlink
-        tmp_directory = os.path.join(dataset_parent_path, "CUB_200_2011", "images_tmp")
+        tmp_directory = os.path.join(
+            dataset_parent_path, "CUB_200_2011", f"images_tmp_{image_subset}"
+        )
         if os.path.exists(tmp_directory):
             shutil.rmtree(tmp_directory)
 
@@ -110,6 +112,7 @@ class BackBoneEmbedding(nn.Module):
 
         self.fc = nn.Linear(1024, embedding_dim)
         self.relu = nn.ReLU(inplace=True)
+        self.bn_last = nn.BatchNorm1d(1024)
 
     def freeze_bn_grad(self):
         for m in self.modules():
@@ -168,6 +171,8 @@ class BackBoneEmbedding(nn.Module):
         x = self.avgpool(x)
         # N x 1024 x 1 x 1
         x = torch.flatten(x, 1)
+        x = self.relu(x)
+        x = self.bn_last(x)
         # N x 1024
         x = self.fc(x)
         # x = self.bn_last(x)
@@ -188,7 +193,7 @@ transform_test = transforms.Compose(
 )
 
 
-def _iterate_train(batch, backbone, center, optimizer1, optimzier2, device):
+def _iterate_train(batch, backbone, center, optimizer1, optimizer2, device):
     """iterate training
 
     Returns:
@@ -306,6 +311,7 @@ if __name__ == "__main__":
     softtriple = SoftTripleLoss(
         args.embedding_dim,
         len(dataset.classes),
+        True,
         args.k,
         args.margin,
         args.gamma,

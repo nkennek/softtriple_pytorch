@@ -18,6 +18,7 @@ class SoftTripleLoss(nn.Module):
         self,
         embedding_dim: int,
         num_categories: int,
+        use_regularizer: bool = True,
         num_initial_center: int = 2,
         similarity_margin: float = 0.1,
         coef_regularizer1: float = 1e-2,
@@ -41,6 +42,7 @@ class SoftTripleLoss(nn.Module):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.num_categories = num_categories
+        self.use_regularizer = use_regularizer
         self.num_initial_center = num_initial_center
         self.delta = similarity_margin
         self.gamma_inv = 1 / coef_regularizer1
@@ -89,5 +91,8 @@ class SoftTripleLoss(nn.Module):
         h = h - self.delta * one_hot
         h.mul_(self.lambda_)
         clf_loss = self.base_loss(h, labels)
+        if not self.use_regularizer:
+            return clf_loss
+
         var_loss = self.cluster_variance_loss()
         return clf_loss + self.tau * var_loss
